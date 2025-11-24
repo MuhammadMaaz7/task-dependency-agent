@@ -1,0 +1,11 @@
+[
+  {
+    "name": "task_dependency_agent",
+    "description": "Resolves task dependency graphs, highlights blockers, and detects cycles.",
+    "intents": ["task.resolve_dependencies"],
+    "type": "http",
+    "endpoint": "http://localhost:9001/task",
+    "healthcheck": "http://localhost:9001/health",
+    "timeout_ms" :"8000"
+  }
+]

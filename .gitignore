@@ -1,0 +1,24 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Distribution / build
+build/
+dist/
+*.egg-info/
+
+# IDE / tooling
+.idea/
+.vscode/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# App data
+LTM/*.json
+
