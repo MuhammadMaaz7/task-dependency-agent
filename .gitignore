@@ -22,3 +22,4 @@ Thumbs.db
 # App data
 LTM/*.json
 
+.vercel

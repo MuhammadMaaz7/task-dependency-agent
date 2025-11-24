@@ -30,5 +30,5 @@ def handle_task(req: AgentRequest):
     return tda.handle_supervisor_request(req.dict())
 
 
-if __name__ == "__main__":
-    uvicorn.run("main_api:app", host="0.0.0.0", port=9001, reload=True)
+# if __name__ == "__main__":
+#     uvicorn.run("main_api:app", host="0.0.0.0", port=9001, reload=True)
