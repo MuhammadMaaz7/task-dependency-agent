@@ -21,11 +21,10 @@ Task Dependency Agent (TDA) is a FastAPI microservice that resolves task executi
 - pip (or uv/pipenv/poetry) for dependency installation.
 
 ### Python Dependencies
-Install FastAPI, Uvicorn, and test tooling:
+Install pinned dependencies from `requirements.txt`:
 ```bash
-pip install fastapi uvicorn pydantic pytest
+pip install -r requirements.txt
 ```
-If you prefer a pinned environment, create a `requirements.txt` with the same packages and install via `pip install -r requirements.txt`.
 
 ## Local Setup
 1. Clone or open the repository.
@@ -68,6 +67,24 @@ curl -X POST http://localhost:9001/task ^
   }"
 ```
 The response contains `execution_order`, `blocked_tasks`, `cycles_detected`, and echo data such as `request_id`.
+
+## Deploying to Vercel
+This repo is wired for Vercel’s Python runtime via `vercel.json` and the `api/main.py` entrypoint.
+
+1. Install the Vercel CLI (requires Node.js):
+   ```bash
+   npm i -g vercel
+   ```
+2. Authenticate: `vercel login`.
+3. From the repo root, run `vercel` to create the project (accept defaults or set a custom name).
+4. Deploy with `vercel --prod` once you are satisfied with the preview build.
+
+Behind the scenes Vercel:
+- Installs `requirements.txt`.
+- Packages `api/main.py`, which simply exposes the FastAPI `app` defined in `main_api.py`.
+- Routes every request (`/(.*)`) to the ASGI app via the Python serverless runtime.
+
+After deployment you can hit the same `/health` and `/task` paths on your Vercel domain.
 
 ## Long-Term Memory (Caching)
 Every task graph is normalized to JSON and cached in `LTM/tda_ltm.json`. You can change the storage path via the `ltm_file` constructor parameter in `TaskDependencyAgent`. Delete the JSON file if you want to reset cached answers.
