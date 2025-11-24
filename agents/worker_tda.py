@@ -1,5 +1,5 @@
 # agents/workers/worker_tda.py
-from agents.workers.worker_base import AbstractWorkerAgent
+from agents.worker_base import AbstractWorkerAgent
 from collections import deque, defaultdict
 import json
 import os

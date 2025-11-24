@@ -1,3 +1,11 @@
+import sys
+import os
+
+# Get absolute path to project root
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
@@ -13,6 +21,10 @@ class AgentRequest(BaseModel):
     intent: str
     input: Dict[str, Any]
     context: Optional[Dict[str, Any]] = None
+
+@app.get("/")
+def root():
+    return {"message": "Task Dependency Agent Service is running"}
 
 @app.get("/health")
 def health_check():
