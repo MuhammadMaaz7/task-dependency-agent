@@ -11,10 +11,12 @@ Task Dependency Agent (TDA) is a FastAPI microservice that resolves task executi
 
 ## Repository Layout
 - `main_api.py` – FastAPI entry point that wires HTTP requests to the agent.
+- `api/main.py` – Thin Vercel adapter that exposes the FastAPI `app` for serverless hosting.
 - `agent/worker_tda.py` – Core TaskDependencyAgent implementation.
 - `agent/worker_base.py` – Shared worker interface and messaging helpers.
 - `LTM/tda_ltm.json` – Default long-term memory file (auto-created).
 - `tests/` – Unit tests for supervisor request handling and cycle detection.
+- `vercel.json` – Route configuration for the Vercel deployment.
 
 ## Prerequisites
 - Python 3.11+ (matching the version used during development).
@@ -69,7 +71,7 @@ curl -X POST http://localhost:9001/task ^
 The response contains `execution_order`, `blocked_tasks`, `cycles_detected`, and echo data such as `request_id`.
 
 ## Deploying to Vercel
-This repo is wired for Vercel’s Python runtime via `vercel.json` and the `api/main.py` entrypoint.
+This repo is wired for Vercel’s native Python runtime via `vercel.json` and the `api/main.py` entrypoint.
 
 1. Install the Vercel CLI (requires Node.js):
    ```bash
@@ -80,21 +82,51 @@ This repo is wired for Vercel’s Python runtime via `vercel.json` and the `api/
 4. Deploy with `vercel --prod` once you are satisfied with the preview build.
 
 Behind the scenes Vercel:
-- Installs `requirements.txt`.
-- Packages `api/main.py`, which simply exposes the FastAPI `app` defined in `main_api.py`.
-- Routes every request (`/(.*)`) to the ASGI app via the Python serverless runtime.
+- Installs dependencies from `requirements.txt`.
+- Packages `api/main.py`, which simply imports the FastAPI `app` defined in `main_api.py`.
+- Routes every request (`/(.*)`) to the ASGI app via the Python serverless runtime defined in `vercel.json`.
 
 After deployment you can hit the same `/health` and `/task` paths on your Vercel domain.
+
+### Current Production Deployment
+- Health check: https://task-dependency-agent.vercel.app/ returns a JSON confirmation that the service is running. [[source]](https://task-dependency-agent.vercel.app/)
+
+If you redeploy under a different organization/project, update this section with the new domain.
 
 ## Long-Term Memory (Caching)
 Every task graph is normalized to JSON and cached in `LTM/tda_ltm.json`. You can change the storage path via the `ltm_file` constructor parameter in `TaskDependencyAgent`. Delete the JSON file if you want to reset cached answers.
 
 ## Running Tests
+### Local unit tests
 Execute the pytest suite from the repository root:
 ```bash
 pytest
 ```
 Tests use temporary directories for LTM storage, so they do not mutate the real cache.
+
+### Remote smoke tests
+After deploying, hit the live endpoints:
+```bash
+# Health
+curl https://task-dependency-agent.vercel.app/health
+
+# Sample dependency resolution
+curl -X POST https://task-dependency-agent.vercel.app/task \
+  -H "Content-Type: application/json" \
+  -d '{
+        "request_id": "remote-demo-001",
+        "agent_name": "task_dependency_agent",
+        "intent": "task.resolve_dependencies",
+        "input": {
+          "tasks": [
+            {"id": "design", "depends_on": []},
+            {"id": "build", "depends_on": ["design"]},
+            {"id": "test", "depends_on": ["build"]}
+          ]
+        }
+      }'
+```
+Adjust the base URL if you deploy to a different Vercel project or environment.
 
 ## Troubleshooting
 - **HTTP 422 errors** – Ensure your payload matches the `AgentRequest` schema defined in `main_api.py`.
