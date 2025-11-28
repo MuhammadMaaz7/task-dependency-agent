@@ -325,23 +325,35 @@ class TaskDependencyAgent(AbstractWorkerAgent):
                 f"Intent '{intent}' is not supported. Use {sorted(self.SUPPORTED_INTENTS)}.",
             )
 
-        tasks = self._extract_tasks(input_payload)
-        if tasks is None:
-            return self._error_response(
-                request_id,
-                agent_name,
-                "invalid_input",
-                "Provide tasks via input.tasks, input.metadata.extra.tasks, or JSON in input.text.",
-            )
+        # Check if this is a database trigger (auto-trigger from supervisor)
+        trigger = input_payload.get("trigger")
+        if trigger == "database_update":
+            # Use database workflow: retrieve tasks, infer dependencies, update database
+            try:
+                logger.info(f"[{self._id}] Database trigger received, processing tasks from MongoDB")
+                result = self.process_task_with_database()
+            except Exception as exc:
+                logger.error(f"[{self._id}] Database workflow failed: {exc}", exc_info=True)
+                return self._error_response(request_id, agent_name, "runtime_error", str(exc))
+        else:
+            # Manual trigger with tasks provided in input
+            tasks = self._extract_tasks(input_payload)
+            if tasks is None:
+                return self._error_response(
+                    request_id,
+                    agent_name,
+                    "invalid_input",
+                    "Provide tasks via input.tasks, input.metadata.extra.tasks, or JSON in input.text.",
+                )
 
-        validation_error = self._validate_tasks(tasks)
-        if validation_error:
-            return self._error_response(request_id, agent_name, "invalid_input", validation_error)
+            validation_error = self._validate_tasks(tasks)
+            if validation_error:
+                return self._error_response(request_id, agent_name, "invalid_input", validation_error)
 
-        try:
-            result = self.process_task({"tasks": tasks})
-        except Exception as exc:  # pragma: no cover
-            return self._error_response(request_id, agent_name, "runtime_error", str(exc))
+            try:
+                result = self.process_task({"tasks": tasks})
+            except Exception as exc:  # pragma: no cover
+                return self._error_response(request_id, agent_name, "runtime_error", str(exc))
 
         return {
             "request_id": request_id,
