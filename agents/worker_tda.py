@@ -1,20 +1,50 @@
 # agents/workers/worker_tda.py
 from agents.worker_base import AbstractWorkerAgent
+from agents.openrouter_client import OpenRouterClient
+from agents.database_client import DatabaseClient
 from collections import deque, defaultdict
+from dotenv import load_dotenv
 import json
+import logging
 import os
 from typing import Any, Dict, List, Optional
 import uuid
+from datetime import datetime
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Configure structured logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 class TaskDependencyAgent(AbstractWorkerAgent):
     """Worker that resolves task dependencies and exposes the supervisor handshake."""
 
     SUPPORTED_INTENTS = {"task.resolve_dependencies"}
 
-    def __init__(self, agent_id: str, supervisor_id: str, ltm_file: str = "LTM/tda_ltm.json"):
+    def __init__(self, agent_id: str, supervisor_id: str, ltm_file: str = "LTM/tda_ltm.json", db_client: Optional[DatabaseClient] = None):
         super().__init__(agent_id, supervisor_id)
         self.ltm_file = ltm_file
         self._ltm_store = self._load_ltm()
+        
+        # Initialize OpenRouter client for LLM-based dependency inference
+        # This will raise ValueError if API key is not configured
+        try:
+            self.openrouter_client = OpenRouterClient()
+            logger.info(f"[{agent_id}] OpenRouter client initialized successfully")
+        except ValueError as e:
+            # Log error but don't fail initialization - will fail on actual inference
+            logger.warning(f"[{agent_id}] OpenRouter client initialization failed: {e}")
+            self.openrouter_client = None
+        
+        # Initialize database client (optional, can be injected for testing)
+        self.db_client = db_client
+        if db_client:
+            logger.info(f"[{agent_id}] Database client initialized")
 
     # ---------------- Persistent LTM ----------------
     def _load_ltm(self):
@@ -45,104 +75,229 @@ class TaskDependencyAgent(AbstractWorkerAgent):
     # ---------------- Task Processing ----------------
     def process_task(self, task_data: dict) -> dict:
         """
-        Accepts: {"tasks": [ {"id": <id>, "depends_on": [<id>, ...]}, ... ] }
-        Returns: dict with execution_order, blocked_tasks, cycles_detected, raw_graph
+        Accepts: {"tasks": [ {"id": <id>, "name": <name>, "description": <desc>}, ... ] }
+        Uses LLM to infer dependencies and returns resolved dependencies with execution order.
+        Returns: dict with dependencies and execution_order
         """
         tasks = task_data.get("tasks", [])
-        dag = {t["id"]: t.get("depends_on", []) for t in tasks}
-
-        # Use cached result if available (LTM key is canonical JSON)
-        task_key = json.dumps(dag, sort_keys=True)
-        cached = self.read_from_ltm(task_key)
-        if cached:
-            return {"from_ltm": True, **cached}
-
-        order, blocked, cycles = self._resolve_dependencies(dag)
-
+        
+        if not tasks:
+            return {
+                "dependencies": {},
+                "execution_order": []
+            }
+        
+        # Use LLM to infer dependencies
+        dependencies = self._infer_dependencies_with_llm(tasks)
+        
+        # Calculate execution order using simple topological sort
+        execution_order = self._calculate_execution_order(dependencies)
+        
         result = {
-            "execution_order": order,
-            "blocked_tasks": blocked,
-            "cycles_detected": cycles,
-            "raw_graph": dag
+            "dependencies": dependencies,
+            "execution_order": execution_order
         }
-
-        # Store in LTM
-        try:
-            self.write_to_ltm(task_key, result)
-        except Exception:
-            pass
-
+        
         return result
-
-
-    def _resolve_dependencies(self, dag: dict):
+    
+    def _infer_dependencies_with_llm(self, tasks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """
-        Detect cycles (list of cycles as lists), then do a topological sort
-        on nodes not in cycles. Return (order, blocked, cycles).
+        Use OpenRouter LLM to infer task dependencies from descriptions.
+        
+        Requirements: 4.1, 4.2, 4.4, 4.5
+        
+        Args:
+            tasks: List of task dictionaries with id, name, description fields
+            
+        Returns:
+            Dictionary mapping task IDs to lists of dependency task IDs
+            
+        Raises:
+            RuntimeError: If OpenRouter client is not initialized or inference fails
         """
-        # DFS to find cycles (recorded as lists of nodes)
-        visited = {}
-        stack = []
-        cycles = []
-
-        def dfs(node):
-            if node in stack:
-                cycle_start = stack.index(node)
-                cycle = stack[cycle_start:] + [node]
-                # normalize cycle (start smallest for deterministic output)
-                cycles.append(cycle)
-                return
-            if visited.get(node, False):
-                return
-            visited[node] = True
-            stack.append(node)
-            for dep in dag.get(node, []):
-                if dep in dag:
-                    dfs(dep)
-            stack.pop()
-
-        for node in dag:
-            if not visited.get(node, False):
-                dfs(node)
-
-        # Topological sort ignoring cycle nodes
-        indegree = defaultdict(int)
-        for node, deps in dag.items():
+        if self.openrouter_client is None:
+            raise RuntimeError(
+                "OpenRouter client not initialized. Check OPENROUTER_API_KEY environment variable."
+            )
+        
+        # Prepare task data for LLM (only need id, name, description)
+        task_data = [
+            {
+                "id": t["id"],
+                "name": t.get("name", "Unnamed"),
+                "description": t.get("description", "No description")
+            }
+            for t in tasks
+        ]
+        
+        # Call OpenRouter API to infer dependencies
+        try:
+            logger.info(f"[{self._id}] Calling OpenRouter API to infer dependencies for {len(task_data)} tasks")
+            dependencies = self.openrouter_client.infer_dependencies(task_data)
+            logger.info(f"[{self._id}] Successfully inferred dependencies for {len(dependencies)} tasks")
+        except RuntimeError as e:
+            # Check if it's an authentication error
+            if "Authentication failed" in str(e):
+                logger.error(f"[{self._id}] Authentication error with OpenRouter API: {e}")
+            elif "Rate limit exceeded" in str(e):
+                logger.error(f"[{self._id}] Rate limit exceeded for OpenRouter API: {e}")
+            else:
+                logger.error(f"[{self._id}] OpenRouter API request failed: {e}")
+            raise RuntimeError(f"Failed to infer dependencies: {str(e)}")
+        except Exception as e:
+            logger.error(f"[{self._id}] Unexpected error inferring dependencies with LLM: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to infer dependencies: {str(e)}")
+        
+        # Build complete dependency map (include tasks with no dependencies)
+        complete_dependencies = {}
+        for task in tasks:
+            task_id = task["id"]
+            complete_dependencies[task_id] = dependencies.get(task_id, [])
+        
+        return complete_dependencies
+    
+    def _calculate_execution_order(self, dependencies: Dict[str, List[str]]) -> List[str]:
+        """
+        Calculate execution order using simple topological sort.
+        
+        Args:
+            dependencies: Dictionary mapping task IDs to their dependency lists
+            
+        Returns:
+            List of task IDs in execution order
+        """
+        # Calculate in-degree for each task
+        in_degree = {task_id: 0 for task_id in dependencies}
+        
+        for task_id, deps in dependencies.items():
             for dep in deps:
-                indegree[node] += 1
-                indegree[dep] += 0  # ensure dep is in indegree
-
-        cycle_nodes = {n for cycle in cycles for n in cycle}
-
-        queue = deque([n for n in dag if indegree[n] == 0 and n not in cycle_nodes])
-        order = []
-        processed = set()
-
+                if dep in in_degree:
+                    in_degree[task_id] += 1
+        
+        # Start with tasks that have no dependencies
+        queue = deque([task_id for task_id, degree in in_degree.items() if degree == 0])
+        execution_order = []
+        
         while queue:
-            node = queue.popleft()
-            order.append(node)
-            processed.add(node)
-            for neighbor, deps in dag.items():
-                if node in deps and neighbor not in cycle_nodes:
-                    indegree[neighbor] -= 1
-                    if indegree[neighbor] == 0 and neighbor not in processed:
-                        queue.append(neighbor)
+            current = queue.popleft()
+            execution_order.append(current)
+            
+            # Reduce in-degree for tasks that depend on current task
+            for task_id, deps in dependencies.items():
+                if current in deps:
+                    in_degree[task_id] -= 1
+                    if in_degree[task_id] == 0 and task_id not in execution_order:
+                        queue.append(task_id)
+        
+        return execution_order
+    
+    # ---------------- Database Operations ----------------
+    def retrieve_tasks_from_database(self) -> List[Dict[str, Any]]:
+        """
+        Retrieve all tasks from the database.
+        
+        Requirements: 3.1, 3.2
+        
+        Returns:
+            List of task dictionaries from database
+            
+        Raises:
+            RuntimeError: If database client is not initialized or query fails
+        """
+        if self.db_client is None:
+            raise RuntimeError("Database client not initialized")
+        
+        try:
+            logger.info(f"[{self._id}] Retrieving tasks from database")
+            tasks = self.db_client.get_all_tasks()
+            logger.info(f"[{self._id}] Successfully retrieved {len(tasks)} tasks from database")
+            return tasks
+        except Exception as e:
+            logger.error(f"[{self._id}] Database query failed: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to retrieve tasks from database: {str(e)}")
+    
+    def update_tasks_in_database(self, dependencies: Dict[str, List[str]], execution_order: List[str]) -> bool:
+        """
+        Update tasks in database with inferred dependencies and execution order.
+        
+        Requirements: 6.1, 6.2
+        
+        Args:
+            dependencies: Dictionary mapping task IDs to dependency lists
+            execution_order: List of task IDs in execution order
+            
+        Returns:
+            True if update successful, False otherwise
+            
+        Raises:
+            RuntimeError: If database client is not initialized or update fails
+        """
+        if self.db_client is None:
+            raise RuntimeError("Database client not initialized")
+        
+        # Build update payloads for each task
+        task_updates = []
+        for idx, task_id in enumerate(execution_order):
+            update = {
+                "id": task_id,
+                "depends_on": dependencies.get(task_id, []),
+                "execution_order": idx + 1,  # 1-indexed
+                "status": "ready"
+            }
+            task_updates.append(update)
+        
+        # Update database atomically
+        try:
+            logger.info(f"[{self._id}] Updating {len(task_updates)} tasks in database")
+            result = self.db_client.update_tasks_batch(task_updates)
+            logger.info(f"[{self._id}] Successfully updated {len(task_updates)} tasks in database")
+            return result
+        except Exception as e:
+            logger.error(f"[{self._id}] Database update failed: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to update tasks in database: {str(e)}")
+    
+    def process_task_with_database(self) -> dict:
+        """
+        Complete workflow: retrieve tasks from DB, infer dependencies, update DB.
+        
+        Requirements: 3.1, 4.1, 4.2, 6.1, 6.2
+        
+        Returns:
+            Dictionary with dependencies and execution_order
+            
+        Raises:
+            RuntimeError: If any step fails
+        """
+        logger.info(f"[{self._id}] Starting complete workflow: retrieve -> infer -> update")
+        
+        try:
+            # Step 1: Retrieve tasks from database
+            tasks = self.retrieve_tasks_from_database()
+            
+            if not tasks:
+                logger.warning(f"[{self._id}] No tasks found in database")
+                return {
+                    "dependencies": {},
+                    "execution_order": [],
+                    "message": "No tasks found in database"
+                }
+            
+            # Step 2: Process tasks (infer dependencies and calculate execution order)
+            logger.info(f"[{self._id}] Processing {len(tasks)} tasks")
+            result = self.process_task({"tasks": tasks})
+            
+            # Step 3: Update database with results
+            self.update_tasks_in_database(result["dependencies"], result["execution_order"])
+            
+            logger.info(f"[{self._id}] Workflow completed successfully")
+            return result
+            
+        except Exception as e:
+            logger.error(f"[{self._id}] Workflow failed: {e}", exc_info=True)
+            raise
 
-        # Blocked nodes = nodes not in order and not already in cycle (these have missing deps)
-        blocked = [n for n in dag if n not in order and n not in cycle_nodes]
-        # Include cycle nodes as blocked as well (they cannot be scheduled)
-        blocked = list(dict.fromkeys(blocked + list(cycle_nodes)))  # uniq preserve order-ish
 
-        # Normalize cycles (remove duplicate rotations)
-        normalized_cycles = []
-        seen = set()
-        for cyc in cycles:
-            cyc_tuple = tuple(cyc)
-            if cyc_tuple not in seen:
-                normalized_cycles.append(cyc)
-                seen.add(cyc_tuple)
 
-        return order, blocked, normalized_cycles
 
     # ---------------- Supervisor Handshake ----------------
     def handle_supervisor_request(self, request_payload: Dict[str, Any]) -> Dict[str, Any]:

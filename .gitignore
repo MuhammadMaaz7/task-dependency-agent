@@ -23,3 +23,5 @@ Thumbs.db
 LTM/*.json
 
 .vercel
+.kiro
+.env
