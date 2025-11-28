@@ -10,10 +10,22 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import Any, Dict, Optional
 from agents.worker_tda import TaskDependencyAgent
+from agents.database_client import DatabaseClient
 
 app = FastAPI(title="Task Dependency Agent Service")
 
-tda = TaskDependencyAgent(agent_id="task_dependency_agent", supervisor_id="supervisor")
+# Initialize database client
+try:
+    db_client = DatabaseClient()
+    tda = TaskDependencyAgent(
+        agent_id="task_dependency_agent", 
+        supervisor_id="supervisor",
+        db_client=db_client
+    )
+except Exception as e:
+    print(f"Warning: Failed to initialize database client: {e}")
+    # Initialize without database client (will fail on database operations)
+    tda = TaskDependencyAgent(agent_id="task_dependency_agent", supervisor_id="supervisor")
 
 class AgentRequest(BaseModel):
     request_id: str
