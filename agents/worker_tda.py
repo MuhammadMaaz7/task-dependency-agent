@@ -327,7 +327,9 @@ class TaskDependencyAgent(AbstractWorkerAgent):
 
         # Check if this is a database trigger (auto-trigger from supervisor)
         trigger = input_payload.get("trigger")
-        if trigger == "database_update":
+        
+        # If database client is available and no tasks provided, use database workflow
+        if trigger == "database_update" or (self.db_client and not input_payload.get("tasks")):
             # Use database workflow: retrieve tasks, infer dependencies, update database
             try:
                 logger.info(f"[{self._id}] Database trigger received, processing tasks from MongoDB")
@@ -343,7 +345,7 @@ class TaskDependencyAgent(AbstractWorkerAgent):
                     request_id,
                     agent_name,
                     "invalid_input",
-                    "Provide tasks via input.tasks, input.metadata.extra.tasks, or JSON in input.text.",
+                    "Provide tasks via input.tasks, input.metadata.extra.tasks, JSON in input.text, or configure database client for automatic retrieval.",
                 )
 
             validation_error = self._validate_tasks(tasks)
