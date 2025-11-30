@@ -164,8 +164,12 @@ class TestTDADatabaseIntegration:
         ]
         mock_db_client.update_tasks_batch.return_value = True
         
-        # Create TDA with database client
-        tda = TaskDependencyAgent("tda-1", "supervisor-1", db_client=mock_db_client)
+        # Create TDA with database client and unique LTM file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file, db_client=mock_db_client)
         
         # Execute complete workflow
         result = tda.process_task_with_database()

@@ -69,6 +69,8 @@ class TestLLMDependencyInference:
     @patch('agents.worker_tda.OpenRouterClient')
     def test_process_task_with_llm_inference(self, mock_openrouter_class):
         """Test that process_task uses LLM inference and returns dependencies and execution order"""
+        import tempfile
+        
         # Setup mock OpenRouter client
         mock_client = MagicMock()
         mock_openrouter_class.return_value = mock_client
@@ -78,8 +80,11 @@ class TestLLMDependencyInference:
             "task-2": ["task-1"]
         }
         
-        # Create TDA instance
-        tda = TaskDependencyAgent("tda-1", "supervisor-1")
+        # Create TDA instance with unique LTM file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file)
         
         # Test tasks
         task_data = {
@@ -109,6 +114,8 @@ class TestLLMDependencyInference:
     @patch('agents.worker_tda.OpenRouterClient')
     def test_process_task_always_uses_llm(self, mock_openrouter_class):
         """Test that process_task always uses LLM inference"""
+        import tempfile
+        
         # Setup mock OpenRouter client
         mock_client = MagicMock()
         mock_openrouter_class.return_value = mock_client
@@ -118,8 +125,11 @@ class TestLLMDependencyInference:
             "task-2": ["task-1"]
         }
         
-        # Create TDA instance
-        tda = TaskDependencyAgent("tda-1", "supervisor-1")
+        # Create TDA instance with unique LTM file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file)
         
         # Test tasks
         task_data = {

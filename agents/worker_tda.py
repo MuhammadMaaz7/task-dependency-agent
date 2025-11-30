@@ -87,6 +87,15 @@ class TaskDependencyAgent(AbstractWorkerAgent):
                 "execution_order": []
             }
         
+        # Create cache key based on task IDs and descriptions
+        cache_key = self._create_cache_key(tasks)
+        
+        # Check LTM cache first
+        cached_result = self.read_from_ltm(cache_key)
+        if cached_result:
+            logger.info(f"[{self._id}] Using cached result from LTM")
+            return {**cached_result, "from_cache": True}
+        
         # Use LLM to infer dependencies
         dependencies = self._infer_dependencies_with_llm(tasks)
         
@@ -98,7 +107,35 @@ class TaskDependencyAgent(AbstractWorkerAgent):
             "execution_order": execution_order
         }
         
+        # Store in LTM cache
+        self.write_to_ltm(cache_key, result)
+        logger.info(f"[{self._id}] Cached result in LTM")
+        
         return result
+    
+    def _create_cache_key(self, tasks: List[Dict[str, Any]]) -> str:
+        """
+        Create a cache key based on task IDs and descriptions.
+        
+        Args:
+            tasks: List of task dictionaries
+            
+        Returns:
+            Hash string to use as cache key
+        """
+        import hashlib
+        
+        # Create a deterministic string from task data
+        task_data = []
+        for task in sorted(tasks, key=lambda t: t.get("id", "")):
+            task_str = f"{task.get('id')}:{task.get('name', '')}:{task.get('description', '')}"
+            task_data.append(task_str)
+        
+        # Hash it for a compact key
+        cache_string = "|".join(task_data)
+        cache_hash = hashlib.md5(cache_string.encode()).hexdigest()
+        
+        return f"tasks_{cache_hash}"
     
     def _infer_dependencies_with_llm(self, tasks: List[Dict[str, Any]]) -> Dict[str, List[str]]:
         """

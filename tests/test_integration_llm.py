@@ -30,8 +30,12 @@ class TestLLMIntegration:
             "task-4": ["task-3"]   # Deploy depends on Test
         }
         
-        # Create TDA instance
-        tda = TaskDependencyAgent("tda-1", "supervisor-1")
+        # Create TDA instance with unique LTM file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file)
         
         # Input: Tasks without dependencies (as they would come from Knowledge Builder)
         task_data = {
@@ -106,8 +110,12 @@ class TestLLMIntegration:
             "task-4": ["task-2", "task-3"]
         }
         
-        # Create TDA instance
-        tda = TaskDependencyAgent("tda-1", "supervisor-1")
+        # Create TDA instance with unique LTM file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file)
         
         # Input tasks
         task_data = {
@@ -152,8 +160,12 @@ class TestLLMIntegration:
         # Mock LLM response with no dependencies
         mock_client.infer_dependencies.return_value = {}
         
-        # Create TDA instance
-        tda = TaskDependencyAgent("tda-1", "supervisor-1")
+        # Create TDA instance with unique LTM file
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
+            ltm_file = f.name
+        
+        tda = TaskDependencyAgent("tda-1", "supervisor-1", ltm_file=ltm_file)
         
         # Input tasks
         task_data = {
